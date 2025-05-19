@@ -2,166 +2,168 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 
-export default function VideoEditor() {
+export default function VisualVideoEditor() {
   const ffmpegRef = useRef(null);
-  const videoRef = useRef(null);
-  const thumbnailContainerRef = useRef(null);
+  const hiddenVideoRef = useRef(null);
+  const canvasRef = useRef(null);
 
-  const [videoFiles, setVideoFiles] = useState([]);
-  const [outputUrl, setOutputUrl] = useState('');
+  const [file, setFile] = useState(null);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [duration, setDuration] = useState(0);
+  const [thumbs, setThumbs] = useState([]);
+  const [splitTime, setSplitTime] = useState(0);
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+  const [offsetX, setOffsetX] = useState(0);
+
   const [isProcessing, setIsProcessing] = useState(false);
-
-  const [videoDuration, setVideoDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [thumbnails, setThumbnails] = useState([]);
+  const [partUrls, setPartUrls] = useState([]);
+  const dragIndex = useRef(null);
 
   useEffect(() => {
     ffmpegRef.current = new FFmpeg();
   }, []);
 
-  const handleFileChange = async (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
-
-    setVideoFiles(files);
-    setOutputUrl('');
-    setThumbnails([]);
-    setIsProcessing(true);
-
-    const ffmpeg = ffmpegRef.current;
-    await ffmpeg.load();
-
-    const file = files[0];
-    const inputName = 'input.mp4';
-    await ffmpeg.writeFile(inputName, await fetchFile(file));
-        const data = await ffmpeg.readFile('input.mp4');
-    const blob = new Blob([data.buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-
-    setOutputUrl(url);
-    setIsProcessing(false);
-
-    const video = document.createElement('video');
-    video.src = url;
-    await new Promise((resolve) => {
-      video.onloadedmetadata = () => resolve();
-    });
-
-    const thumbs = await generateThumbnails(ffmpeg, 'input.mp4', video.duration);
-    setVideoDuration(video.duration);
-    setThumbnails(thumbs);
-  };
-
-  const generateThumbnails = async (ffmpeg, sourceName, duration) => {
-    const thumbs = [];
-    const totalThumbs = duration < 10 ? Math.floor(duration) : 10;
-    const step = duration < 10 ? 1 : duration / 10;
-
-    for (let i = 0; i < totalThumbs; i++) {
-      const time = duration < 10 ? i : i * step;
-      const timeStr = time.toFixed(2);
-      const outputName = `thumb_${i}.jpg`;
-
-      await ffmpeg.exec([
-        '-ss', timeStr,
-        '-i', sourceName,
-        '-frames:v', '1',
-        '-q:v', '5',
-        outputName
-      ]);
-
-      const data = await ffmpeg.readFile(outputName);
-      const blob = new Blob([data.buffer], { type: 'image/jpeg' });
-      thumbs.push({ url: URL.createObjectURL(blob), time: parseFloat(timeStr) });
+  // 隐藏 video + canvas 缩略图
+  const generateThumbnails = async (videoEl, count = 20) => {
+    const arr = [];
+    const offCanvas = document.createElement('canvas');
+    const w = 60, h = 40;
+    offCanvas.width = w; offCanvas.height = h;
+    const ctx = offCanvas.getContext('2d');
+    for (let i = 0; i < count; i++) {
+      const t = (duration * i) / count;
+      await new Promise(r => { videoEl.currentTime = t; videoEl.onseeked = r; });
+      ctx.drawImage(videoEl, 0, 0, w, h);
+      arr.push(offCanvas.toDataURL('image/jpeg',0.7));
     }
-
-    return thumbs;
+    return arr;
   };
 
-  const formatTime = (seconds) => {
-    const min = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const sec = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${min}:${sec}`;
+  const onFileChange = async e => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    const url = URL.createObjectURL(f);
+    setVideoUrl(url);
+
+    const v = hiddenVideoRef.current;
+    v.src = url;
+    await new Promise(r => v.onloadedmetadata = r);
+    setDuration(v.duration);
+    setSplitTime(v.duration/2);
+
+    const thumbsArr = await generateThumbnails(v, 20);
+    setThumbs(thumbsArr);
   };
 
-  const handleDrag = (e) => {
-    const container = thumbnailContainerRef.current;
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const time = ratio * videoDuration;
-    videoRef.current.currentTime = time;
-    setCurrentTime(time);
+  // Canvas 渲染
+  useEffect(() => {
+    const c = canvasRef.current; if (!c) return;
+    const ctx = c.getContext('2d');
+    const W = c.width, H = c.height;
+    ctx.clearRect(0,0,W,H);
+    ctx.save(); ctx.translate(-offsetX,0);
+    thumbs.forEach((src,i)=>{
+      const img = new Image(); img.src = src;
+      img.onload = ()=>{
+        ctx.drawImage(img, i*(W/thumbs.length),0,W/thumbs.length,H);
+        if(i===thumbs.length-1) drawSplit(ctx,W,H);
+      };
+    });
+    ctx.restore();
+  }, [thumbs, splitTime, offsetX]);
+
+  const drawSplit = (ctx,totalW,h) => {
+    const x = (splitTime/duration)*totalW;
+    ctx.save(); ctx.translate(-offsetX,0);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+    ctx.strokeRect(0,0,x,h);
+    ctx.strokeRect(x,0,totalW-x,h);
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h);
+    ctx.strokeStyle='red'; ctx.lineWidth=2; ctx.stroke();
+    ctx.restore();
+  };
+
+  // 拖拽
+  const onMouseDown = e => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cx = e.clientX-rect.left+offsetX;
+    const splitX = (splitTime/duration)*rect.width;
+    if(Math.abs(cx-splitX)<6) setIsDraggingSplit(true);
+    else { dragIndex.current = null; }
+  };
+  const onMouseMove = e => {
+    if(isDraggingSplit){
+      const rect = canvasRef.current.getBoundingClientRect();
+      let cx = e.clientX-rect.left+offsetX;
+      cx=Math.max(0,Math.min(rect.width,cx));
+      setSplitTime((cx/rect.width)*duration);
+    }
+  };
+  const onMouseUp = ()=> setIsDraggingSplit(false);
+
+  // 分割视频
+  const handleSplit = async () => {
+    if(!file) return; setIsProcessing(true);
+    const ff = ffmpegRef.current;
+    await ff.load(); await ff.writeFile('input.mp4',await fetchFile(file));
+    const p1='part1.mp4', p2='part2.mp4';
+    await ff.exec(['-ss','0','-to',splitTime.toFixed(2),'-i','input.mp4','-c','copy',p1]);
+    await ff.exec(['-ss',splitTime.toFixed(2),'-to',duration.toFixed(2),'-i','input.mp4','-c','copy',p2]);
+    const d1=await ff.readFile(p1), d2=await ff.readFile(p2);
+    const u1=URL.createObjectURL(new Blob([d1.buffer],{type:'video/mp4'}));
+    const u2=URL.createObjectURL(new Blob([d2.buffer],{type:'video/mp4'}));
+    setPartUrls([u1,u2]); setIsProcessing(false);
+  };
+
+  // 拖拽交换顺序
+  const onSegmentDragStart = (i) => { dragIndex.current = i; };
+  const onSegmentDrop = (i) => {
+    const j=dragIndex.current; if(j===null) return;
+    const arr=[...partUrls]; [arr[j],arr[i]]=[arr[i],arr[j]];
+    setPartUrls(arr); dragIndex.current=null;
   };
 
   return (
     <div>
-      <h2>视频预览 + 拖动缩略图时间轴</h2>
+      <h2>可视化视频剪辑 (画卷式)&mdash; 分割模式</h2>
+      <input type='file' accept='video/*' onChange={onFileChange}/>
+      <video ref={hiddenVideoRef} style={{display:'none'}}/>
 
-      <input type="file" accept="video/*" onChange={handleFileChange} />
-      <br /><br />
+      {thumbs.length>0 && (
+        <>
+          <canvas width={600} height={40}
+            ref={canvasRef}
+            style={{marginTop:10,cursor:'pointer'}}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={onMouseUp}/>
+          <div>分割时间：{formatTime(splitTime)}</div>
+          <button onClick={handleSplit} disabled={isProcessing} style={{margin:'8px 0'}}>
+            {isProcessing?'分割中…':'分割视频'}
+          </button>
+        </>
+      )}
 
-      {outputUrl && (
-        <div>
-          <h4>视频预览：</h4>
-
-          <video
-            ref={videoRef}
-            controls
-            src={outputUrl}
-            width="480"
-            onLoadedMetadata={() => {
-              const duration = videoRef.current.duration;
-              setVideoDuration(duration);
-            }}
-            onTimeUpdate={() => {
-              setCurrentTime(videoRef.current.currentTime);
-            }}
-          />
-
-          <div style={{ textAlign: 'center' }}>
-            {formatTime(currentTime)} / {formatTime(videoDuration)}
-          </div>
-
-          <div
-            ref={thumbnailContainerRef}
-            style={{
-              position: 'relative',
-              display: 'flex',
-              width: '250px',
-              overflowX: 'hidden',
-              marginTop: '10px',
-              cursor: 'pointer',
-              border: '2px solid #ccc',
-              padding: '4px',
-              borderRadius: '6px'
-            }}
-            onClick={handleDrag}
-          >
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: `${(currentTime / videoDuration) * 250}px`,
-                width: '2px',
-                height: '100%',
-                backgroundColor: 'red'
-              }}
-            />
-            {thumbnails.map((thumb, idx) => (
-              <img
-                key={idx}
-                src={thumb.url}
-                alt={`thumb-${thumb.time}`}
-                style={{ width: `${250 / thumbnails.length}px` }}
-              />
-            ))}
-          </div>
-
-          <br />
-          <a href={outputUrl} download="result.mp4">下载视频</a>
+      {partUrls.length===2 && (
+        <div style={{display:'flex',gap:8,marginTop:10}}>
+          {partUrls.map((u,i)=>(
+            <div key={i} draggable
+              onDragStart={()=>onSegmentDragStart(i)}
+              onDragOver={e=>e.preventDefault()}
+              onDrop={()=>onSegmentDrop(i)}
+            >
+              <video src={u} controls width={280}/>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+function formatTime(sec){
+  const m=Math.floor(sec/60).toString().padStart(2,'0');
+  const s=Math.floor(sec%60).toString().padStart(2,'0');
+  return `${m}:${s}`;
 }

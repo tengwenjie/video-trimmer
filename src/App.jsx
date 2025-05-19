@@ -1,10 +1,10 @@
 import React from 'react';
-import VideoTrimmer from './components/videoTrimmer';
+import VisualVideoEditor from './components/videoTrimmer';
 
 function App() {
   return (
     <div>
-      <VideoTrimmer />
+      <VisualVideoEditor />
     </div>
   );
 }
