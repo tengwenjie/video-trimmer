@@ -13,6 +13,7 @@ export default function VisualVideoEditor() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [editedUrl, setEditedUrl] = useState('');
   const [draggingIdx, setDraggingIdx] = useState(null);
+  const [activeIdx, setActiveIdx] = useState(null);
 
   useEffect(() => {
     ffmpegRef.current = new FFmpeg();
@@ -47,36 +48,56 @@ export default function VisualVideoEditor() {
     setDuration(dur);
     const thumbs = await generateThumbnails(hiddenVideoRef.current, 20, 0, dur);
     setSegments([{ start: 0, end: dur, thumbs, splitTime: dur / 2 }]);
+    setActiveIdx(0);
   };
 
-  // split segment
-  const handleSplit = idx => setSegments(prev => {
-    const seg = prev[idx];
-    const { start, end, thumbs, splitTime } = seg;
-    const rel = splitTime - start;
-    const count = thumbs.length;
-    const splitIdx = Math.round((count * rel) / (end - start));
-    const first = thumbs.slice(0, splitIdx);
-    const second = thumbs.slice(splitIdx);
-    return [
-      ...prev.slice(0, idx),
-      { start, end: splitTime, thumbs: first, splitTime: start + rel/2 },
-      { start: splitTime, end, thumbs: second, splitTime: splitTime + (end - splitTime)/2 },
-      ...prev.slice(idx+1)
-    ];
-  });
+  // split active segment
+  const handleSplit = () => {
+    if (activeIdx === null) return;
+    setSegments(prev => {
+      const seg = prev[activeIdx];
+      const { start, end, thumbs, splitTime } = seg;
+      const rel = splitTime - start;
+      const count = thumbs.length;
+      const splitIdx = Math.round((count * rel) / (end - start));
+      const first = thumbs.slice(0, splitIdx);
+      const second = thumbs.slice(splitIdx);
+      return [
+        ...prev.slice(0, activeIdx),
+        { start, end: splitTime, thumbs: first, splitTime: start + rel / 2 },
+        { start: splitTime, end, thumbs: second, splitTime: splitTime + (end - splitTime) / 2 },
+        ...prev.slice(activeIdx + 1)
+      ];
+    });
+  };
 
-  // click to set split
-  const updateSplitTime = (idx, newTime) => setSegments(prev => prev.map((s,i)=> i===idx?{...s, splitTime:newTime}:s));
+  // delete active segment
+  const handleDelete = () => {
+    if (activeIdx === null) return;
+    setSegments(prev => prev.filter((_, i) => i !== activeIdx));
+    setActiveIdx(prev => {
+      const newLen = segments.length - 1;
+      if (newLen <= 0) return null;
+      if (prev >= newLen) return newLen - 1;
+      return prev;
+    });
+  };
+
+  // click to set split time and active segment
+  const updateSplitTime = (idx, newTime) => {
+    setActiveIdx(idx);
+    setSegments(prev => prev.map((s, i) => i === idx ? { ...s, splitTime: newTime } : s));
+  };
 
   // drag & drop reorder
-  const onDragStart = (e, idx) => { setDraggingIdx(idx); };
-  const onDragOver = (e) => { e.preventDefault(); };
+  const onDragStart = (e, idx) => setDraggingIdx(idx);
+  const onDragOver = e => e.preventDefault();
   const onDrop = (e, idx) => {
     const temp = [...segments];
-    const moved = temp.splice(draggingIdx,1)[0];
-    temp.splice(idx,0,moved);
+    const moved = temp.splice(draggingIdx, 1)[0];
+    temp.splice(idx, 0, moved);
     setSegments(temp);
+    if (draggingIdx === activeIdx) setActiveIdx(idx);
     setDraggingIdx(null);
   };
 
@@ -88,82 +109,136 @@ export default function VisualVideoEditor() {
     await ff.load();
     await ff.writeFile('input.mp4', await fetchFile(file));
     const partFiles = [];
-    // sequentially create parts
     for (let i = 0; i < segments.length; i++) {
       const { start, end } = segments[i];
       const name = `part${i}.mp4`;
       await ff.exec(['-ss', start.toFixed(2), '-to', end.toFixed(2), '-i', 'input.mp4', '-c', 'copy', name]);
       partFiles.push(name);
     }
-    // write concat list
-    const list = partFiles.map(f=>`file '${f}'`).join('\n');
+    const list = partFiles.map(f => `file '${f}'`).join('\n');
     await ff.writeFile('list.txt', new TextEncoder().encode(list));
-    // concat into final
-    await ff.exec(['-f','concat','-safe','0','-i','list.txt','-c','copy','edited.mp4']);
+    await ff.exec(['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'edited.mp4']);
     const data = await ff.readFile('edited.mp4');
-    setEditedUrl(URL.createObjectURL(new Blob([data.buffer],{type:'video/mp4'})));
+    setEditedUrl(URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' })));    
     setIsProcessing(false);
   };
 
   return (
     <div>
-      <h2>可视化视频剪辑 (多级重排)</h2>
+      <h2>可视化视频剪辑</h2>
       <input type="file" accept="video/*" onChange={onFileChange} />
-      <video ref={hiddenVideoRef} style={{display:'none'}} />
+      <video ref={hiddenVideoRef} style={{ display: 'none' }} />
 
-      <div style={{display:'flex', gap:'8px', marginTop:10}}>
-        {segments.map((seg,idx)=>(
-          <div key={idx}
-               draggable
-               onDragStart={e=>onDragStart(e,idx)}
-               onDragOver={e=>onDragOver(e)}
-               onDrop={e=>onDrop(e,idx)}
-               style={{cursor:'move', textAlign:'center'}}>
+      {/* 时间轴 */}
+      {segments.length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', marginTop: 10, fontSize: 12, color: '#555' }}>
+          {segments.map((seg, idx) => (
+            <div key={idx} style={{ width: 100, textAlign: 'center' }}>
+              {formatTime(seg.start)}
+            </div>
+          ))}
+          <div style={{ width: 100, textAlign: 'center' }}>
+            {formatTime(segments[segments.length - 1].end)}
+          </div>
+        </div>
+      )}
+
+      {/* 缩略图排列区 */}
+      <div style={{ display: 'flex', gap: '8px', marginTop: 4 }}>
+        {segments.map((seg, idx) => (
+          <div
+            key={idx}
+            draggable
+            onDragStart={e => onDragStart(e, idx)}
+            onDragOver={onDragOver}
+            onDrop={e => onDrop(e, idx)}
+            style={{
+              cursor: 'move',
+              textAlign: 'center',
+              border: idx === activeIdx ? '2px solid #007bff' : '1px solid #ccc'
+            }}
+          >
             <canvas
-              width={100} height={40}
-              style={{border:'1px solid #ccc', display:'block', margin:'0 auto'}}
-              ref={c=>{
-                if(!c) return;
-                const ctx=c.getContext('2d'); ctx.clearRect(0,0,100,40);
-                seg.thumbs.forEach((src,i)=>{
-                  const img=new Image(); img.src=src;
-                  img.onload=()=>{ ctx.drawImage(img,(i*100)/seg.thumbs.length,0,100/seg.thumbs.length,40); };
+              width={100}
+              height={40}
+              style={{ display: 'block', margin: '0 auto', cursor: 'pointer' }}
+              ref={c => {
+                if (!c) return;
+                const ctx = c.getContext('2d');
+                ctx.clearRect(0, 0, 100, 40);
+                seg.thumbs.forEach((src, i) => {
+                  const img = new Image();
+                  img.src = src;
+                  img.onload = () => {
+                    ctx.drawImage(img, (i * 100) / seg.thumbs.length, 0, 100 / seg.thumbs.length, 40);
+                    if (idx === activeIdx) {
+                      const x = ((seg.splitTime - seg.start) / (seg.end - seg.start)) * 100;
+                      ctx.beginPath();
+                      ctx.moveTo(x, 0);
+                      ctx.lineTo(x, 40);
+                      ctx.strokeStyle = 'red';
+                      ctx.lineWidth = 2;
+                      ctx.stroke();
+                    }
+                  };
                 });
-                // draw split line
-                const x=((seg.splitTime-seg.start)/(seg.end-seg.start))*100;
-                ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,40);
-                ctx.strokeStyle='red'; ctx.lineWidth=2; ctx.stroke();
               }}
-              onClick={e=>{
-                const rect=e.target.getBoundingClientRect();
-                const cx=e.clientX-rect.left;
-                updateSplitTime(idx, seg.start+(cx/rect.width)*(seg.end-seg.start));
+              onClick={e => {
+                const rect = e.target.getBoundingClientRect();
+                const cx = e.clientX - rect.left;
+                updateSplitTime(idx, seg.start + (cx / rect.width) * (seg.end - seg.start));
               }}
             />
-            <div>Seg {idx+1}</div>
-            <button onClick={()=>handleSplit(idx)} disabled={seg.thumbs.length<2}>Split</button>
+            <div>Seg {idx + 1}</div>
           </div>
         ))}
       </div>
 
-      {segments.length>0 && (
-        <button onClick={exportEdited} disabled={isProcessing} style={{marginTop:10}}>
-          {isProcessing?'处理中…':'导出编辑后视频'}
+      {/* Single Split and Delete Buttons */}
+      {activeIdx !== null && (
+        <>
+          <button
+            onClick={handleSplit}
+            disabled={segments[activeIdx]?.thumbs.length < 2}
+            style={{ marginTop: 10 }}
+          >
+            剪切
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={segments.length < 2}
+            style={{ marginTop: 10, marginLeft: 10 }}
+          >
+            删除
+          </button>
+        </>
+      )}
+
+      {segments.length > 0 && (
+        <button
+          onClick={exportEdited}
+          disabled={isProcessing}
+          style={{ marginTop: 10, marginLeft: 10 }}
+        >
+          {isProcessing ? '处理中…' : '生成视频'}
         </button>
       )}
 
       {editedUrl && (
-        <div style={{marginTop:10}}>
-          <video src={editedUrl} controls width={480}/><br/>
-          <a href={editedUrl} download="edited.mp4">下载</a>
+        <div style={{ marginTop: 10 }}>
+          <video src={editedUrl} controls width={480} />
+          <br />
+          <a href={editedUrl} download="edited.mp4">
+            下载
+          </a>
         </div>
       )}
     </div>
   );
 }
 
-function formatTime(sec){
-  const m=Math.floor(sec/60).toString().padStart(2,'0');
-  const s=Math.floor(sec%60).toString().padStart(2,'0');
+function formatTime(sec) {
+  const m = Math.floor(sec / 60).toString().padStart(2, '0');
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
 }
