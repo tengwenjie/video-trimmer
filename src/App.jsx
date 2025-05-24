@@ -125,7 +125,7 @@ export default function VisualVideoEditor() {
 
   return (
     <div>
-      <h2>可视化视频剪辑</h2>
+      <h2>可视化视频剪辑工具</h2>
       <input type="file" accept="video/*" onChange={onFileChange} />
       <video ref={hiddenVideoRef} style={{ display: 'none' }} />
 
