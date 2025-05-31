@@ -7,5 +7,9 @@ export default defineConfig({
   server:{
     port: 3000,
     open: true
-  }
+  },
+  optimizeDeps: {
+    exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'] // 关键！跳过预处理
+  },
+  assetsInclude: ['**/*.wasm'] // 确保 .wasm 能被正确加载
 })
