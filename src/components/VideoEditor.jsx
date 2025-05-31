@@ -2,6 +2,7 @@ import React, { useState, useRef } from "react";
 import ReactPlayer from "react-player";
 import { Box, Paper, Typography, Button,LinearProgress,Backdrop } from "@mui/material";
 
+
 export default function FilmstripTrimDemo() {
   const [videoUrl, setVideoUrl] = useState("");
   const [outputUrl,setOutputUrl] = useState("");
@@ -27,7 +28,8 @@ export default function FilmstripTrimDemo() {
     files.forEach(file => formData.append('videos', file));
   
     // 调用服务器端合并接口（注意端口和路径）
-    const res = await fetch('http://3.112.34.135:3001/videos/merge', {
+    // const res = await fetch('http://3.112.34.135:3001/videos/merge', {
+    const res = await fetch('http://localhost:3001/videos/merge', {
       method: 'POST',
       body: formData,
     });
@@ -85,7 +87,8 @@ export default function FilmstripTrimDemo() {
         formData.append('end', trimRange[1]);     // 结束时间（单位：秒，字符串类型）
 
         setLoading(true);
-        const res = await fetch('http://3.112.34.135:3001/videos/trim', {
+        // const res = await fetch('http://3.112.34.135:3001/videos/trim', {
+        const res = await fetch('http://localhost:3001/videos/trim', {
             method: 'POST',
             body: formData,
         });
